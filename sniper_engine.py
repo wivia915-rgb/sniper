@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -52,6 +55,26 @@ _NETWORK_ERR_MARKERS = (
     "NS_ERROR_UNKNOWN_HOST",
 )
 _NETWORK_COOLDOWN_SEC = 45
+_playwright_install_lock = threading.Lock()
+_playwright_chromium_ready = False
+
+
+def _ensure_playwright_chromium_installed() -> None:
+    """Install Chromium browser bundle (Streamlit Cloud / fresh deploys)."""
+    global _playwright_chromium_ready
+    with _playwright_install_lock:
+        if _playwright_chromium_ready:
+            return
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+                env=os.environ.copy(),
+            )
+            _playwright_chromium_ready = True
+        except Exception as e:
+            print(f"Error installing playwright browsers: {e}", flush=True)
+            logger.warning("Playwright chromium install failed: %s", e)
 
 
 def _install_fast_network_routes(context) -> None:
@@ -168,6 +191,7 @@ class SniperEngine:
             raise last
 
     def _launch_browser(self, settings: SniperSettings):
+        _ensure_playwright_chromium_installed()
         self._profile_dir.mkdir(parents=True, exist_ok=True)
         if not self._playwright:
             self._playwright = sync_playwright().start()
