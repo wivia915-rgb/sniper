@@ -115,6 +115,33 @@ def _is_network_error(exc: BaseException) -> bool:
     return any(m in text for m in _NETWORK_ERR_MARKERS)
 
 
+def _running_on_streamlit_cloud() -> bool:
+    env = os.environ
+    if env.get("STREAMLIT_RUNTIME_ENVIRONMENT", "").lower() == "cloud":
+        return True
+    if env.get("STREAMLIT_SHARING_MODE"):
+        return True
+    if env.get("STREAMLIT_SERVER_PORT") and not env.get("DISPLAY"):
+        return True
+    return False
+
+
+def _launch_headless_and_args(settings: SniperSettings) -> tuple[bool, list[str]]:
+    """Headless + sandbox flags required on Linux / Streamlit Cloud (no display)."""
+    args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+    ]
+    headless = bool(settings.get("headless", True))
+    on_cloud = _running_on_streamlit_cloud()
+    if on_cloud or sys.platform.startswith("linux"):
+        headless = True
+        args.extend(["--no-sandbox", "--disable-gpu"])
+    if on_cloud:
+        args.append("--disable-software-rasterizer")
+    return headless, args
+
+
 class SniperEngine:
     """Thread-safe vehicle sniper with status and log ring buffer."""
 
@@ -195,14 +222,17 @@ class SniperEngine:
         self._profile_dir.mkdir(parents=True, exist_ok=True)
         if not self._playwright:
             self._playwright = sync_playwright().start()
+        headless, chromium_args = _launch_headless_and_args(settings)
+        if headless and not settings.get("headless"):
+            self._log("Linux/Cloud: forcing headless browser (no display on server).")
         self._context = self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self._profile_dir),
-            headless=settings["headless"],
+            headless=headless,
             viewport={"width": 1280, "height": 900},
             user_agent=USER_AGENT,
             locale="fr-FR",
             timezone_id="Africa/Casablanca",
-            args=["--disable-blink-features=AutomationControlled"],
+            args=chromium_args,
         )
         tuning = scan_tuning_from_settings(settings)
         if tuning.block_heavy_resources:
