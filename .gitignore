@@ -1,0 +1,8 @@
+.env
+sniper_config.json
+seen_listings.json
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
