@@ -93,12 +93,6 @@ class SniperSettings(TypedDict):
     facebook_password: str
     telegram_bot_token: str
     telegram_chat_id: str
-    openai_enabled: bool
-    openai_api_key: str
-    openai_model: str
-    openai_min_snipe_score: int
-    openai_strict_motorcycle: bool
-    openai_after_alert: bool
     turbo_mode: bool
     city: str
     search_keywords: list[str]
@@ -114,12 +108,6 @@ DEFAULTS: SniperSettings = {
     "facebook_password": "",
     "telegram_bot_token": "",
     "telegram_chat_id": "",
-    "openai_enabled": False,
-    "openai_api_key": "",
-    "openai_model": "gpt-4o-mini",
-    "openai_min_snipe_score": 5,
-    "openai_strict_motorcycle": True,
-    "openai_after_alert": False,
     "turbo_mode": False,
     "city": "Casablanca",
     "search_keywords": list(DEFAULT_SEARCH_KEYWORDS),
@@ -164,17 +152,6 @@ def load_config(path: Path | None = None) -> SniperSettings:
         facebook_password=str(merged.get("facebook_password", "")),
         telegram_bot_token=str(merged.get("telegram_bot_token", "")),
         telegram_chat_id=str(merged.get("telegram_chat_id", "")),
-        openai_enabled=bool(merged.get("openai_enabled", False)),
-        openai_api_key=str(merged.get("openai_api_key", "")).strip(),
-        openai_model=str(merged.get("openai_model", DEFAULTS["openai_model"])).strip()
-        or DEFAULTS["openai_model"],
-        openai_min_snipe_score=max(
-            1, min(10, int(merged.get("openai_min_snipe_score", 5)))
-        ),
-        openai_strict_motorcycle=bool(
-            merged.get("openai_strict_motorcycle", True)
-        ),
-        openai_after_alert=bool(merged.get("openai_after_alert", False)),
         turbo_mode=bool(merged.get("turbo_mode", False)),
         city=city,
         search_keywords=parse_search_keywords(merged.get("search_keywords")),

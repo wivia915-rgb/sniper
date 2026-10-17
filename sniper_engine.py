@@ -16,7 +16,6 @@ from playwright.sync_api import sync_playwright
 
 from marketplace_url import ensure_newest_first_sort
 from notifier import TelegramNotifier
-from openai_listing_analyzer import OpenAIListingAnalyzer
 from seen_listings import load_seen, mark_seen
 from sniper_config import SniperSettings, marketplace_search_urls, marketplace_vehicles_url
 from marketplace_detail_time import (
@@ -245,27 +244,6 @@ class SniperEngine:
                 settings["telegram_chat_id"],
             )
             tuning = scan_tuning_from_settings(settings)
-            openai_analyzer: OpenAIListingAnalyzer | None = None
-            openai_after = bool(settings.get("openai_after_alert"))
-            if settings.get("openai_enabled"):
-                openai_analyzer = OpenAIListingAnalyzer(
-                    settings.get("openai_api_key", ""),
-                    model=settings.get("openai_model", "gpt-4o-mini"),
-                    min_snipe_score=int(settings.get("openai_min_snipe_score", 5)),
-                    strict_motorcycle=bool(
-                        settings.get("openai_strict_motorcycle", True)
-                    ),
-                )
-                if openai_analyzer.is_configured():
-                    mode = "after Telegram" if openai_after else "before alert"
-                    self._log(
-                        f"OpenAI ON ({mode}) — min score "
-                        f"{settings.get('openai_min_snipe_score', 5)}/10"
-                    )
-                else:
-                    self._log("OpenAI enabled but API key missing — skip AI.")
-                    openai_analyzer = None
-
             interval = max(10, settings["check_interval_seconds"])
             if settings.get("turbo_mode"):
                 interval = max(10, min(interval, 12))
@@ -293,14 +271,13 @@ class SniperEngine:
                     cycle_seen = 0
                     cycle_age = 0
                     cycle_car = 0
-                    cycle_ai = 0
                     batch, feed_rotation = _feeds_for_scan_cycle(
                         feed_urls, feed_rotation, tuning
                     )
                     for feed_url in batch:
                         if self._stop.is_set():
                             break
-                        sent, n_seen, n_age, n_car, n_ai = self._scan_once(
+                        sent, n_seen, n_age, n_car = self._scan_once(
                             page,
                             feed_url,
                             limit,
@@ -309,20 +286,17 @@ class SniperEngine:
                             notifier,
                             moto_keywords=settings.get("search_keywords") or [],
                             time_filter_enabled=time_filter,
-                            openai_analyzer=openai_analyzer,
-                            openai_after_alert=openai_after,
                             tuning=tuning,
                         )
                         cycle_sent += sent
                         cycle_seen += n_seen
                         cycle_age += n_age
                         cycle_car += n_car
-                        cycle_ai += n_ai
                         time.sleep(tuning.between_feeds_sec)
                     summary = (
                         f"{cycle_sent} new → Telegram | "
                         f"{cycle_seen} déjà vus | {cycle_age} âge | "
-                        f"{cycle_car} voitures | {cycle_ai} ai"
+                        f"{cycle_car} voitures"
                     )
                     with self._lock:
                         self.last_scan_summary = summary
@@ -654,11 +628,9 @@ class SniperEngine:
         *,
         moto_keywords: list[str] | None = None,
         time_filter_enabled: bool = False,
-        openai_analyzer: OpenAIListingAnalyzer | None = None,
-        openai_after_alert: bool = False,
         tuning: ScanTuning | None = None,
-    ) -> tuple[int, int, int, int, int]:
-        """Returns (alerts_sent, skipped_seen, skipped_age, skipped_car, skipped_ai)."""
+    ) -> tuple[int, int, int, int]:
+        """Returns (alerts_sent, skipped_seen, skipped_age, skipped_car)."""
         moto_keywords = moto_keywords or []
         if tuning is None:
             tuning = scan_tuning_from_settings({"turbo_mode": False})
@@ -686,7 +658,6 @@ class SniperEngine:
         skipped_seen = 0
         skipped_age = 0
         skipped_car = 0
-        skipped_ai = 0
         stale_card_streak = 0
         detail_checks = 0
 
@@ -759,42 +730,12 @@ class SniperEngine:
                             break
                         continue
                     stale_card_streak = 0
-            pre_openai = (
-                openai_analyzer
-                and openai_analyzer.is_configured()
-                and not openai_after_alert
-            )
-            if pre_openai:
-                should_alert, ai_summary, ai_score = openai_analyzer.analyze(item)
-                item.ai_summary = ai_summary
-                item.ai_score = ai_score
-                if not should_alert:
-                    self._log(
-                        f"Skip (AI): {item.listing_id} "
-                        f"score={ai_score} — {openai_analyzer.last_error}"
-                    )
-                    mark_seen(item.listing_id, seen, self._seen_path)
-                    skipped_ai += 1
-                    continue
             if notifier.send_telegram_alert(item):
                 mark_seen(item.listing_id, seen, self._seen_path)
                 with self._lock:
                     self.alerts_sent += 1
                 sent += 1
                 self._log(f"[{feed_hint}] Alert sent: {item.title[:50]}")
-                if (
-                    openai_analyzer
-                    and openai_analyzer.is_configured()
-                    and openai_after_alert
-                ):
-                    should_alert, ai_summary, ai_score = openai_analyzer.analyze(item)
-                    if ai_summary or ai_score is not None:
-                        notifier.send_ai_followup(item, ai_score, ai_summary)
-                    if not should_alert:
-                        self._log(
-                            f"AI post-alert note: {item.listing_id} "
-                            f"score={ai_score} — {openai_analyzer.last_error}"
-                        )
             else:
                 self._log(f"Telegram failed for {item.listing_id}")
 
@@ -802,9 +743,9 @@ class SniperEngine:
             self._log(
                 f"[{feed_hint}] {len(listings)} parsed → "
                 f"{sent} new, {skipped_seen} seen, {skipped_age} age, "
-                f"{skipped_car} voitures, {skipped_ai} ai"
+                f"{skipped_car} voitures"
             )
-        return sent, skipped_seen, skipped_age, skipped_car, skipped_ai
+        return sent, skipped_seen, skipped_age, skipped_car
 
 
 def get_shared_engine() -> SniperEngine:

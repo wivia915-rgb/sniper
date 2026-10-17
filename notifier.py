@@ -38,10 +38,6 @@ class TelegramNotifier:
         ]
         if item.time_posted:
             lines.append(f"🕐 {self._escape(item.time_posted)}")
-        if item.ai_score is not None:
-            lines.append(f"🎯 Snipe {item.ai_score}/10")
-        if item.ai_summary:
-            lines.append(f"🤖 {self._escape(item.ai_summary)}")
         lines.append(f'\n<a href="{html.escape(item.url, quote=True)}">Open listing</a>')
         return "\n".join(lines)
 
@@ -127,14 +123,3 @@ class TelegramNotifier:
         """Optional operational messages (startup, errors)."""
         self._send_message(f"<i>{self._escape(message)}</i>")
 
-    def send_ai_followup(
-        self, item: MarketplaceItem, score: int | None, summary: str
-    ) -> bool:
-        """Second Telegram message after fast alert (OpenAI after alert)."""
-        parts = [f"<b>🤖 AI — {self._escape(item.title[:80])}</b>"]
-        if score is not None:
-            parts.append(f"🎯 Snipe {score}/10")
-        if summary:
-            parts.append(self._escape(summary))
-        parts.append(f'<a href="{html.escape(item.url, quote=True)}">Listing</a>')
-        return self._send_message("\n".join(parts))

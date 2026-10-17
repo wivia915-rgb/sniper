@@ -32,9 +32,30 @@ def ensure_user_workspace(user: User) -> None:
     root.mkdir(parents=True, exist_ok=True)
     user_browser_profile_dir(user).mkdir(parents=True, exist_ok=True)
     cfg = user_config_path(user)
-    if not cfg.is_file() and LEGACY_CONFIG.is_file():
-        cfg.write_text(LEGACY_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
-    elif not cfg.is_file():
-        from sniper_config import DEFAULTS, save_config
+    if cfg.is_file():
+        return
+    from sniper_config import DEFAULTS, save_config
 
+    # New accounts always start empty — never copy another user's legacy file.
+    if user.id == 1 and LEGACY_CONFIG.is_file():
+        cfg.write_text(LEGACY_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+    else:
         save_config(dict(DEFAULTS), path=cfg)
+
+
+def reset_user_config(user: User) -> None:
+    """Clear this user's sniper settings (passwords, tokens, keys)."""
+    from sniper_config import DEFAULTS, save_config
+
+    ensure_user_workspace(user)
+    save_config(dict(DEFAULTS), path=user_config_path(user))
+
+
+__all__ = [
+    "ensure_user_workspace",
+    "reset_user_config",
+    "user_browser_profile_dir",
+    "user_config_path",
+    "user_root",
+    "user_seen_path",
+]

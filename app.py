@@ -15,7 +15,6 @@ import streamlit as st
 
 import sniper_engine as sniper_engine_module
 from seen_listings import clear_seen, seen_count
-from openai_listing_analyzer import OpenAIListingAnalyzer
 from sniper_config import (
     CITY_OPTIONS,
     DEFAULT_SEARCH_KEYWORDS,
@@ -29,12 +28,13 @@ from sniper_config import (
 from user_auth import User, authenticate, init_db, register_user
 from user_paths import (
     ensure_user_workspace,
+    reset_user_config,
     user_browser_profile_dir,
     user_config_path,
     user_seen_path,
 )
 
-SNIPER_ENGINE_VERSION = "1.5.0"
+SNIPER_ENGINE_VERSION = "1.5.1"
 
 
 def _current_user() -> User:
@@ -79,12 +79,6 @@ def _do_save_settings(
     fb_password: str,
     tg_token: str,
     tg_chat: str,
-    oai_enabled: bool,
-    oai_key: str,
-    oai_model: str,
-    oai_min_score: int,
-    oai_strict: bool,
-    oai_after: bool,
     turbo_mode: bool,
     city: str,
     keywords_text: str,
@@ -103,12 +97,6 @@ def _do_save_settings(
         "facebook_password": fb_password,
         "telegram_bot_token": tg_token.strip(),
         "telegram_chat_id": tg_chat.strip(),
-        "openai_enabled": oai_enabled,
-        "openai_api_key": oai_key.strip(),
-        "openai_model": (oai_model or "gpt-4o-mini").strip(),
-        "openai_min_snipe_score": int(oai_min_score),
-        "openai_strict_motorcycle": oai_strict,
-        "openai_after_alert": oai_after,
         "turbo_mode": turbo_mode,
         "city": city,
         "search_keywords": parse_search_keywords(keywords_text),
@@ -151,6 +139,12 @@ def _render_auth_screen() -> None:
                 else:
                     ok, msg = register_user(ru, rp)
                     if ok:
+                        user = authenticate(ru, rp)
+                        if user:
+                            ensure_user_workspace(user)
+                            st.session_state.auth_user = user
+                            st.session_state.pop("sniper_engine", None)
+                            st.rerun()
                         st.success(msg)
                     else:
                         st.error(msg)
@@ -177,7 +171,24 @@ _seen_path = user_seen_path(auth_user)
 
 with st.sidebar:
     st.markdown(f"**👤 {auth_user.username}**")
-    st.caption("حسابك — config و seen listings منفصلين.")
+    st.caption(
+        f"إعدادات **خاصة بك** فقط — Facebook / Telegram "
+        f"ما كيتشاركوش مع مستخدمين آخرين."
+    )
+    st.caption(f"Config: `data/users/{auth_user.id}/`")
+    if st.button(
+        "🔄 مسح إعداداتي (vider)",
+        help="يمسح tokens/passwords ديالك ويبدأ config فارغ.",
+        use_container_width=True,
+    ):
+        _eng = st.session_state.get("sniper_engine")
+        if _eng is not None and _eng.is_running():
+            st.warning("Stop Sniper أولاً.")
+        else:
+            reset_user_config(auth_user)
+            st.session_state.pop("sniper_engine", None)
+            st.success("تم — عبّي معلومات **ديالك** و Save.")
+            st.rerun()
     if st.button("تسجيل الخروج", use_container_width=True):
         _eng = st.session_state.get("sniper_engine")
         if _eng is not None and _eng.is_running():
@@ -196,10 +207,20 @@ st.caption(
     f"**{auth_user.username}** (local server)."
 )
 
+_needs_own_credentials = not saved.get("telegram_bot_token") or not saved.get(
+    "facebook_email"
+)
+if _needs_own_credentials:
+    st.info(
+        "📌 **عبّي معلوماتك أنت:** Facebook و Telegram — "
+        "كل مستخدم خاصو **Save Settings** باش يتخزّن فـ dossier ديالو."
+    )
+
 col_form, col_status = st.columns([1, 1], gap="large")
 
 with col_form:
-    st.subheader("Settings")
+    st.subheader(f"Settings — {auth_user.username}")
+    st.caption("هاد الحقول **ديالك وحدك** — ما تستعملش حساب أو bot ديال شي واحد آخر.")
     with st.form("sniper_settings_form"):
         fb_email = st.text_input(
             "Facebook Email",
@@ -223,43 +244,6 @@ with col_form:
             "TELEGRAM_CHAT_ID",
             value=saved["telegram_chat_id"],
             autocomplete="off",
-        )
-        st.divider()
-        oai_enabled = st.checkbox(
-            "OpenAI — تحليل + snipe score",
-            value=bool(saved.get("openai_enabled", False)),
-            help="كيخدم من بعد فلتر الوقت — يزيد 🎯 score و 🤖 ملخص فـ Telegram.",
-        )
-        oai_key = st.text_input(
-            "OPENAI_API_KEY",
-            value=saved.get("openai_api_key", ""),
-            type="password",
-            disabled=not oai_enabled,
-            autocomplete="off",
-        )
-        oai_model = st.text_input(
-            "OpenAI model",
-            value=saved.get("openai_model", "gpt-4o-mini"),
-            disabled=not oai_enabled,
-        )
-        oai_min_score = st.slider(
-            "Min snipe score (1–10)",
-            min_value=1,
-            max_value=10,
-            value=int(saved.get("openai_min_snipe_score", 5)),
-            disabled=not oai_enabled,
-            help="غير الإعلانات ≥ هاد النقطة كيوصلو Telegram.",
-        )
-        oai_strict = st.checkbox(
-            "OpenAI: رفض إلا moto/scooter",
-            value=bool(saved.get("openai_strict_motorcycle", True)),
-            disabled=not oai_enabled,
-        )
-        oai_after = st.checkbox(
-            "OpenAI بعد Telegram (أسرع)",
-            value=bool(saved.get("openai_after_alert", False)),
-            disabled=not oai_enabled,
-            help="Telegram فوري + رسالة 🤖 ثانية — الفلتر DOM/time كيبقى دقيق.",
         )
         st.divider()
         turbo_mode = st.checkbox(
@@ -327,14 +311,7 @@ with col_form:
             value=bool(saved["headless"]),
             help="Turn OFF for first login / 2FA / checkpoint — a Chromium window will open.",
         )
-        btn_save, btn_oai_test = st.columns(2)
-        with btn_save:
-            save_clicked = st.form_submit_button("💾 Save Settings", type="primary")
-        with btn_oai_test:
-            test_oai_form = st.form_submit_button(
-                "🤖 Test OpenAI",
-                disabled=not oai_enabled,
-            )
+        save_clicked = st.form_submit_button("💾 Save Settings", type="primary")
 
     kw_col1, kw_col2 = st.columns(2)
     with kw_col1:
@@ -354,43 +331,21 @@ with col_form:
         )
 
     if save_clicked:
-        if oai_enabled and not oai_key.strip():
-            st.error("OpenAI مفعّل — عبّي **OPENAI_API_KEY** و Save.")
-        else:
-            _do_save_settings(
-                fb_email,
-                fb_password,
-                tg_token,
-                tg_chat,
-                oai_enabled,
-                oai_key,
-                oai_model,
-                oai_min_score,
-                oai_strict,
-                oai_after,
-                turbo_mode,
-                city,
-                keywords_text,
-                time_filter_enabled,
-                max_age,
-                check_interval,
-                top_limit,
-                headless,
-                _config_path,
-            )
-
-    if test_oai_form:
-        if not oai_enabled:
-            st.error("فعّل OpenAI أولاً.")
-        elif not oai_key.strip():
-            st.error("OPENAI_API_KEY فارغ.")
-        else:
-            oai = OpenAIListingAnalyzer(oai_key.strip(), model=oai_model.strip())
-            ok, msg = oai.send_test()
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
+        _do_save_settings(
+            fb_email,
+            fb_password,
+            tg_token,
+            tg_chat,
+            turbo_mode,
+            city,
+            keywords_text,
+            time_filter_enabled,
+            max_age,
+            check_interval,
+            top_limit,
+            headless,
+            _config_path,
+        )
 
 with col_status:
     st.subheader("Control")
@@ -402,14 +357,6 @@ with col_status:
         missing.append("Telegram settings")
     if missing:
         st.warning("Save settings first: " + ", ".join(missing))
-
-    if cfg.get("openai_enabled") and cfg.get("openai_api_key"):
-        st.caption(
-            f"OpenAI: **ON** — min score **{cfg.get('openai_min_snipe_score', 5)}/10** "
-            f"({cfg.get('openai_model', 'gpt-4o-mini')})"
-        )
-    elif cfg.get("openai_enabled"):
-        st.warning("OpenAI ON ولكن **API key** ناقص — Save Settings.")
 
     if cfg.get("turbo_mode"):
         st.caption("⚡ **Turbo ON** — fast scan (v1.4)")
